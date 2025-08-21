@@ -11,6 +11,9 @@ A complete NestJS backend application built from scratch with authentication and
 - **Database**: PostgreSQL with automatic table initialization
 - **API Documentation**: Swagger/OpenAPI documentation available at `/api`
 - **Testing**: Comprehensive Postman collection with positive and negative test cases
+- **Error Handling**: Comprehensive error handling with proper HTTP status codes
+- **Input Validation**: Robust DTO validation using class-validator and class-transformer
+- **Password Reset**: Secure password reset functionality with token-based verification
 
 ## 🛠️ Technology Stack
 
@@ -22,6 +25,7 @@ A complete NestJS backend application built from scratch with authentication and
 - **Password Hashing**: bcryptjs
 - **Validation**: class-validator and class-transformer
 - **Documentation**: Swagger/OpenAPI
+- **Error Handling**: Custom global exception filter
 
 ## 📋 Prerequisites
 
@@ -57,11 +61,11 @@ Edit `.env` with your database credentials:
 
 ```env
 # Database Configuration
-DB_HOST=localhost
-DB_PORT=5432
-DB_USER=postgres
-DB_PASSWORD=your_password
-DB_NAME=fireart_test
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=your_password
+POSTGRES_NAME=fireart_test
 
 # JWT Configuration
 JWT_SECRET=your-super-secret-jwt-key-change-this-in-production
@@ -71,6 +75,8 @@ JWT_EXPIRES_IN=15m
 PORT=3000
 NODE_ENV=development
 ```
+
+**Note**: The project uses custom environment variable names (`POSTGRES_*`) instead of the standard `DB_*` prefix.
 
 ### 4. Database Setup
 
@@ -165,6 +171,11 @@ Content-Type: application/json
 }
 ```
 
+### Validate Password Reset Token
+```http
+GET /auth/password-reset/validate/{token}
+```
+
 ### Password Reset Confirmation
 ```http
 POST /auth/password-reset/confirm
@@ -201,8 +212,8 @@ Authorization: Bearer your_access_token
 
 **Query Parameters:**
 - `search` (optional): Search in name and description
-- `page` (optional): Page number (default: 1)
-- `limit` (optional): Items per page (default: 10)
+- `page` (optional): Page number (default: 1, min: 1)
+- `limit` (optional): Items per page (default: 10, min: 1, max: 100)
 
 ### Get Product by ID
 ```http
@@ -232,7 +243,7 @@ Authorization: Bearer your_access_token
 
 A comprehensive Postman collection is included in the repository:
 
-1. Import `FireArt_Server_Test.postman_collection.json` into Postman
+1. Import `FireArt Server Test API.postman_collection.json` into Postman
 2. Set the `baseUrl` variable to `http://localhost:3000`
 3. Run the tests in sequence:
    - Start with authentication tests (signup, login)
@@ -249,7 +260,7 @@ The Postman collection includes tests for:
 - ✅ Token refresh
 - ✅ User logout
 - ✅ Get current user (with/without token)
-- ✅ Password reset request
+- ✅ Password reset request and confirmation
 
 **Products:**
 - ✅ Create product (success, no auth, invalid data, negative price)
@@ -262,27 +273,32 @@ The Postman collection includes tests for:
 
 ```
 src/
-├── auth/                    # Authentication module
-│   ├── auth.controller.ts   # Auth endpoints
-│   ├── auth.service.ts      # Auth business logic
-│   ├── auth.guard.ts        # Route protection
-│   ├── jwt.service.ts       # JWT operations
-│   └── auth.module.ts       # Auth module configuration
-├── products/                # Products module
-│   ├── products.controller.ts # Product endpoints
-│   ├── products.service.ts   # Product business logic
-│   └── products.module.ts    # Products module configuration
-├── users/                   # Users module (basic structure)
-│   └── users.module.ts      # Users module configuration
-├── database/                # Database layer
-│   ├── database.service.ts  # PostgreSQL connection & queries
-│   └── database.module.ts   # Database module configuration
-├── common/                  # Shared components
-│   └── dto/                 # Data Transfer Objects
-│       ├── auth.dto.ts      # Authentication DTOs
-│       └── product.dto.ts   # Product DTOs
-├── app.module.ts            # Main application module
-└── main.ts                  # Application entry point
+├── modules/                 # Feature modules
+│   ├── auth/               # Authentication module
+│   │   ├── dto/            # Authentication DTOs
+│   │   │   └── auth.dto.ts # Signup, login, password reset DTOs
+│   │   ├── guards/         # Authentication guards
+│   │   │   └── auth.guard.ts # Route protection guard
+│   │   ├── auth.controller.ts # Auth endpoints
+│   │   ├── auth.service.ts # Auth business logic
+│   │   ├── jwt.service.ts  # JWT operations
+│   │   └── auth.module.ts  # Auth module configuration
+│   ├── products/           # Products module
+│   │   ├── dto/            # Product DTOs
+│   │   │   └── product.dto.ts # Create, update, query DTOs
+│   │   ├── products.controller.ts # Product endpoints
+│   │   ├── products.service.ts # Product business logic
+│   │   └── products.module.ts # Products module configuration
+│   ├── users/              # Users module (basic structure)
+│   │   └── users.module.ts # Users module configuration
+│   ├── database/           # Database layer
+│   │   ├── database.service.ts # PostgreSQL connection & queries
+│   │   └── database.module.ts # Database module configuration
+│   └── common/             # Shared components
+│       └── filters/        # Exception filters
+│           └── global-exception.filter.ts # Global error handling
+├── app.module.ts           # Main application module
+└── main.ts                 # Application entry point
 ```
 
 ## 🔒 Security Features
@@ -293,6 +309,8 @@ src/
 - **Input Validation**: Comprehensive DTO validation using class-validator
 - **SQL Injection Prevention**: Parameterized queries
 - **User Isolation**: Users can only access their own products
+- **Password Reset**: Secure token-based password reset with expiration
+- **Error Handling**: Comprehensive error handling without information leakage
 
 ## 📊 Database Schema
 
@@ -333,6 +351,18 @@ CREATE TABLE refresh_tokens (
 );
 ```
 
+### Password Reset Tokens Table
+```sql
+CREATE TABLE password_reset_tokens (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  token VARCHAR(255) UNIQUE NOT NULL,
+  expires_at TIMESTAMP NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(user_id)
+);
+```
+
 ## 🚀 Available Scripts
 
 ```bash
@@ -357,16 +387,16 @@ npm run test:e2e           # Run end-to-end tests
 
 ## 🌍 Environment Variables
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `DB_HOST` | PostgreSQL host | `localhost` |
-| `DB_PORT` | PostgreSQL port | `5432` |
-| `DB_USER` | Database username | `postgres` |
-| `DB_PASSWORD` | Database password | `password` |
-| `DB_NAME` | Database name | `fireart_test` |
+| Variable | Description | Default      |
+|---------|-------------|--------------|
+| `POSTGRES_HOST` | PostgreSQL host | `localhost`  |
+| `POSTGRES_PORT` | PostgreSQL port | `5432`       |
+| `POSTGRES_USER` | Database username | `postgres`   |
+| `POSTGRES_PASSWORD` | Database password | `password`   |
+| `POSTGRES_NAME` | Database name | `fireart_test` |
 | `JWT_SECRET` | JWT signing secret | `your-secret-key` |
-| `JWT_EXPIRES_IN` | Access token expiration | `15m` |
-| `PORT` | Server port | `3000` |
+| `JWT_EXPIRES_IN` | Access token expiration | `15m`        |
+| `PORT` | Server port | `3000`       |
 | `NODE_ENV` | Environment | `development` |
 
 ## 🔧 Configuration
@@ -384,35 +414,79 @@ npm run test:e2e           # Run end-to-end tests
 ### Validation
 - **Email**: Must be valid email format
 - **Password**: Minimum 6 characters
-- **Price**: Must be non-negative number
-- **Name**: Required field
+- **Price**: Must be positive number (> 0)
+- **Name**: Required field, max 255 characters
+- **Description**: Optional, max 1000 characters
+- **Page**: Must be positive integer
+- **Limit**: Must be integer between 1-100
 
 ## 🚨 Error Handling
 
-The application provides comprehensive error handling:
+The application provides comprehensive error handling with proper HTTP status codes:
 
-- **400 Bad Request**: Validation errors, duplicate emails
+- **400 Bad Request**: Validation errors, invalid input data, business logic errors
 - **401 Unauthorized**: Missing/invalid tokens, invalid credentials
 - **404 Not Found**: Resource not found
-- **500 Internal Server Error**: Server-side errors
+- **409 Conflict**: Duplicate resources (e.g., duplicate product names)
+- **422 Unprocessable Entity**: DTO validation errors (handled by ValidationPipe)
+
+### Error Response Format
+```json
+{
+  "statusCode": 400,
+  "message": "Product name is required",
+  "error": "Bad Request",
+  "timestamp": "2025-08-21T12:00:00.000Z",
+  "path": "/products",
+  "method": "POST"
+}
+```
+
+## 🆕 Recent Improvements
+
+### Enhanced Error Handling
+- **Global Exception Filter**: Centralized error handling with proper logging
+- **Default Status Code**: Changed from 500 to 400 for better client experience
+- **Business Logic Validation**: Specific error types for different scenarios
+- **Comprehensive Logging**: Request context, user agent, IP address logging
+
+### Improved Input Validation
+- **DTO-based Validation**: All validation moved to DTOs using class-validator
+- **Automatic Transformation**: Query parameters automatically converted to proper types
+- **Custom Error Messages**: User-friendly validation error messages
+- **Input Sanitization**: Automatic trimming and data cleaning
+
+### Password Reset Functionality
+- **Secure Token Generation**: 32-byte random tokens with 1-hour expiration
+- **Database Storage**: Tokens stored with proper constraints and cleanup
+- **Fake Email Service**: Placeholder for production email integration
+- **Token Validation**: Endpoint to validate reset tokens before use
+
+### Code Quality Improvements
+- **Try-Catch Blocks**: Comprehensive error handling in all services
+- **Type Safety**: Improved TypeScript types and interfaces
+- **Logging**: Structured logging with proper error context
+- **Clean Architecture**: Better separation of concerns
 
 ## 📝 Assumptions and Notes
 
-1. **Password Reset**: The password reset functionality is implemented as a placeholder. In production, you would:
-   - Generate secure reset tokens
-   - Store them in the database with expiration
-   - Send emails with reset links
-   - Implement proper token verification
+1. **Password Reset**: The password reset functionality is fully implemented with:
+   - Secure token generation and storage
+   - Database constraints and cleanup
+   - Token validation endpoints
+   - Placeholder email service (ready for production integration)
 
-2. **Email Service**: No actual email service is implemented for password reset
+2. **Email Service**: No actual email service is implemented for password reset, but the structure is ready for integration with services like SendGrid or AWS SES
 
 3. **Rate Limiting**: No rate limiting is implemented (consider adding for production)
 
-4. **Logging**: Basic console logging is used (consider structured logging for production)
+4. **Logging**: Enhanced logging with debug level support for development
 
 5. **Health Checks**: No health check endpoints (consider adding for production)
 
 6. **CORS**: CORS is enabled for all origins (restrict in production)
+
+7. **Environment Variables**: Uses custom `POSTGRES_*` prefix instead of standard `DB_*` prefix
 
 ## 🤝 Contributing
 
@@ -433,3 +507,5 @@ For any questions or issues, please refer to the project documentation or create
 ---
 
 **Note**: This is a test project built from scratch without using authentication or CRUD libraries as per requirements. All authentication logic, database operations, and security measures are implemented manually to demonstrate understanding of the underlying concepts.
+
+**Recent Updates**: The project has been significantly enhanced with improved error handling, comprehensive input validation, password reset functionality, and better code organization following NestJS best practices.

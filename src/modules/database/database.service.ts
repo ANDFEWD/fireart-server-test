@@ -10,9 +10,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     try {
       // Validate environment variables
       const host = process.env.POSTGRES_HOST || 'localhost';
-      const port = parseInt(process.env.POSTGRES_PORT) || 8030;
-      const user = process.env.POSTGRES_USER || 'root';
-      const password = process.env.POSTGRES_PASSWORD || '123456';
+      const port = parseInt(process.env.POSTGRES_PORT) || 5432;
+      const user = process.env.POSTGRES_USER || 'postgres';
+      const password = process.env.POSTGRES_PASSWORD || 'password';
       const database = process.env.POSTGRES_NAME || 'fireart_test';
 
       if (port < 1 || port > 65535) {
