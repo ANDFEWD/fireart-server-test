@@ -1,8 +1,8 @@
-import { Controller, Post, Body, UseGuards, Req, HttpCode, HttpStatus } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { Controller, Post, Body, UseGuards, Req, HttpCode, HttpStatus, Get, Param } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiParam } from '@nestjs/swagger';
 import { Request } from 'express';
 import { AuthService } from './auth.service';
-import { AuthGuard } from './auth.guard';
+import { AuthGuard } from './guards/auth.guard';
 import { SignupDto, LoginDto, PasswordResetDto, PasswordResetConfirmDto, RefreshTokenDto } from './dto/auth.dto';
 
 @ApiTags('Authentication')
@@ -55,6 +55,14 @@ export class AuthController {
     return this.authService.requestPasswordReset(passwordResetDto);
   }
 
+  @Get('password-reset/validate/:token')
+  @ApiOperation({ summary: 'Validate password reset token' })
+  @ApiParam({ name: 'token', description: 'Password reset token' })
+  @ApiResponse({ status: 200, description: 'Token validation result' })
+  async validatePasswordResetToken(@Param('token') token: string) {
+    return this.authService.validatePasswordResetToken(token);
+  }
+
   @Post('password-reset/confirm')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Confirm password reset' })
@@ -64,7 +72,7 @@ export class AuthController {
     return this.authService.confirmPasswordReset(passwordResetConfirmDto);
   }
 
-  @Post('me')
+  @Get('me')
   @UseGuards(AuthGuard)
   @ApiBearerAuth()
   @HttpCode(HttpStatus.OK)

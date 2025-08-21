@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
+import { Injectable, OnModuleInit, OnModuleDestroy, Logger, BadRequestException } from '@nestjs/common';
 import { Pool, PoolClient } from 'pg';
 
 @Injectable()
@@ -8,12 +8,23 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit() {
     try {
+      // Validate environment variables
+      const host = process.env.POSTGRES_HOST || 'localhost';
+      const port = parseInt(process.env.POSTGRES_PORT) || 8030;
+      const user = process.env.POSTGRES_USER || 'root';
+      const password = process.env.POSTGRES_PASSWORD || '123456';
+      const database = process.env.POSTGRES_NAME || 'fireart_test';
+
+      if (port < 1 || port > 65535) {
+        throw new BadRequestException('Invalid database port number');
+      }
+
       this.pool = new Pool({
-        host: process.env.DB_HOST || 'localhost',
-        port: parseInt(process.env.DB_PORT) || 5432,
-        user: process.env.DB_USER || 'postgres',
-        password: process.env.DB_PASSWORD || 'password',
-        database: process.env.DB_NAME || 'fireart_test',
+        host,
+        port,
+        user,
+        password,
+        database,
         max: 20,
         idleTimeoutMillis: 30000,
         connectionTimeoutMillis: 2000,
@@ -84,6 +95,22 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         )
       `);
 
+      // Create password_reset_tokens table
+      await client.query(`
+        DROP TABLE IF EXISTS password_reset_tokens CASCADE
+      `);
+      
+      await client.query(`
+        CREATE TABLE password_reset_tokens (
+          id SERIAL PRIMARY KEY,
+          user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+          token VARCHAR(255) UNIQUE NOT NULL,
+          expires_at TIMESTAMP NOT NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(user_id)
+        )
+      `);
+
       this.logger.log('Database tables initialized successfully');
     } catch (error) {
       this.logger.error('Error initializing database tables:', error);
@@ -99,12 +126,32 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       const result = await client.query(text, params);
       return result;
     } catch (error) {
+      // Handle specific database errors
+      if (error instanceof Error) {
+        if (error.message.includes('duplicate key value violates unique constraint')) {
+          this.logger.warn(`Duplicate key constraint violation: ${error.message}`);
+          throw new BadRequestException('Resource already exists');
+        } else if (error.message.includes('violates foreign key constraint')) {
+          this.logger.warn(`Foreign key constraint violation: ${error.message}`);
+          throw new BadRequestException('Referenced resource does not exist');
+        } else if (error.message.includes('syntax error')) {
+          this.logger.error(`SQL syntax error: ${error.message}`);
+          throw new BadRequestException('Invalid database query');
+        } else if (error.message.includes('does not exist')) {
+          this.logger.error(`Table or column does not exist: ${error.message}`);
+          throw new BadRequestException('Database schema error');
+        } else if (error.message.includes('connection')) {
+          this.logger.error(`Database connection error: ${error.message}`);
+          throw new BadRequestException('Database connection failed');
+        }
+      }
+
       this.logger.error(`Database query error: ${error.message}`, {
         query: text,
         params,
         error: error.stack
       });
-      throw error;
+      throw new BadRequestException('Database operation failed');
     } finally {
       client.release();
     }
@@ -115,7 +162,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       return await this.pool.connect();
     } catch (error) {
       this.logger.error('Error getting database client:', error);
-      throw error;
+      throw new BadRequestException('Failed to get database connection');
     }
   }
 }

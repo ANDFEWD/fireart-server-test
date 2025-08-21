@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ForbiddenException, InternalServerErrorException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, InternalServerErrorException, Logger, BadRequestException, ConflictException } from '@nestjs/common';
 import { DatabaseService } from '../database/database.service';
 import { CreateProductDto, UpdateProductDto, ProductResponseDto } from './dto/product.dto';
 
@@ -12,9 +12,19 @@ export class ProductsService {
     try {
       const { name, description, price } = createProductDto;
 
+      // Check if product with same name already exists for this user
+      const existingProduct = await this.databaseService.query(
+        'SELECT id FROM products WHERE name = $1 AND user_id = $2',
+        [name.trim(), userId]
+      );
+
+      if (existingProduct.rows.length > 0) {
+        throw new ConflictException('A product with this name already exists');
+      }
+
       const result = await this.databaseService.query(
         'INSERT INTO products (name, description, price, user_id) VALUES ($1, $2, $3, $4) RETURNING *',
-        [name, description, price, userId]
+        [name.trim(), description?.trim() || null, price, userId]
       );
 
       const product = result.rows[0];
@@ -23,49 +33,72 @@ export class ProductsService {
       this.logger.log(`Product created successfully: ${name} by user ${userId}`);
       return mappedProduct;
     } catch (error) {
+      if (error instanceof ConflictException) {
+        throw error;
+      }
       this.logger.error(`Error creating product: ${error.message}`, error.stack);
-      throw new InternalServerErrorException('Failed to create product');
+      throw new BadRequestException('Failed to create product. Please try again.');
     }
   }
 
   async findAll(userId: number, search?: string, page: number = 1, limit: number = 10): Promise<{ products: ProductResponseDto[], total: number, page: number, limit: number }> {
     try {
-      const offset = (page - 1) * limit;
+      // Validate userId
+      if (!userId || userId <= 0 || isNaN(userId)) {
+        this.logger.error(`Invalid userId provided: ${userId}`);
+        throw new BadRequestException('Invalid user ID');
+      }
+
+      // Ensure we have valid default values
+      const validPage = Math.max(1, page || 1);
+      const validLimit = Math.min(100, Math.max(1, limit || 10));
+      const offset = (validPage - 1) * validLimit;
+      
+      this.logger.debug(`findAll called with: userId=${userId}, search="${search}", page=${page}, limit=${limit}`);
+      this.logger.debug(`Processed values: validPage=${validPage}, validLimit=${validLimit}, offset=${offset}`);
       
       let query = 'SELECT * FROM products WHERE user_id = $1';
       let countQuery = 'SELECT COUNT(*) FROM products WHERE user_id = $1';
       const params: any[] = [userId];
       let paramIndex = 2;
 
-      if (search) {
+      if (search && search.trim().length > 0) {
         query += ` AND (name ILIKE $${paramIndex} OR description ILIKE $${paramIndex})`;
         countQuery += ` AND (name ILIKE $${paramIndex} OR description ILIKE $${paramIndex})`;
-        params.push(`%${search}%`);
+        params.push(`%${search.trim()}%`);
         paramIndex++;
       }
 
       query += ' ORDER BY created_at DESC LIMIT $' + paramIndex + ' OFFSET $' + (paramIndex + 1);
-      params.push(limit, offset);
+      params.push(validLimit, offset);
+
+      // For count query, we only need userId and search (if any), not pagination params
+      const countParams = params.slice(0, search && search.trim().length > 0 ? 2 : 1);
+
+      this.logger.debug(`Query: ${query}`);
+      this.logger.debug(`Count query: ${countQuery}`);
+      this.logger.debug(`Main params: ${JSON.stringify(params)}`);
+      this.logger.debug(`Count params: ${JSON.stringify(countParams)}`);
 
       const [productsResult, countResult] = await Promise.all([
         this.databaseService.query(query, params),
-        this.databaseService.query(countQuery, params.slice(0, paramIndex - 2))
+        this.databaseService.query(countQuery, countParams)
       ]);
 
       const products = productsResult.rows.map(product => this.mapToProductResponse(product));
       const total = parseInt(countResult.rows[0].count);
 
-      this.logger.log(`Products retrieved for user ${userId}: ${products.length} products, page ${page}`);
+      this.logger.log(`Products retrieved for user ${userId}: ${products.length} products, page ${validPage}`);
 
       return {
         products,
         total,
-        page,
-        limit
+        page: validPage,
+        limit: validLimit
       };
     } catch (error) {
       this.logger.error(`Error retrieving products: ${error.message}`, error.stack);
-      throw new InternalServerErrorException('Failed to retrieve products');
+      throw new BadRequestException('Failed to retrieve products. Please try again.');
     }
   }
 
@@ -77,7 +110,7 @@ export class ProductsService {
       );
 
       if (result.rows.length === 0) {
-        throw new NotFoundException('Product not found');
+        throw new NotFoundException(`Product with ID ${id} not found`);
       }
 
       const product = this.mapToProductResponse(result.rows[0]);
@@ -88,7 +121,7 @@ export class ProductsService {
         throw error;
       }
       this.logger.error(`Error retrieving product ${id}: ${error.message}`, error.stack);
-      throw new InternalServerErrorException('Failed to retrieve product');
+      throw new BadRequestException('Failed to retrieve product. Please try again.');
     }
   }
 
@@ -104,13 +137,13 @@ export class ProductsService {
 
       if (name !== undefined) {
         updateFields.push(`name = $${paramIndex}`);
-        params.push(name);
+        params.push(name.trim());
         paramIndex++;
       }
 
       if (description !== undefined) {
         updateFields.push(`description = $${paramIndex}`);
-        params.push(description);
+        params.push(description?.trim() || null);
         paramIndex++;
       }
 
@@ -122,6 +155,18 @@ export class ProductsService {
 
       if (updateFields.length === 0) {
         return existingProduct;
+      }
+
+      // Check if name change would conflict with existing product
+      if (name !== undefined && name !== existingProduct.name) {
+        const nameConflict = await this.databaseService.query(
+          'SELECT id FROM products WHERE name = $1 AND user_id = $2 AND id != $3',
+          [name.trim(), userId, id]
+        );
+
+        if (nameConflict.rows.length > 0) {
+          throw new ConflictException('A product with this name already exists');
+        }
       }
 
       updateFields.push(`updated_at = CURRENT_TIMESTAMP`);
@@ -136,11 +181,11 @@ export class ProductsService {
       this.logger.log(`Product updated successfully: ${id} by user ${userId}`);
       return updatedProduct;
     } catch (error) {
-      if (error instanceof NotFoundException) {
+      if (error instanceof NotFoundException || error instanceof ConflictException) {
         throw error;
       }
       this.logger.error(`Error updating product ${id}: ${error.message}`, error.stack);
-      throw new InternalServerErrorException('Failed to update product');
+      throw new BadRequestException('Failed to update product. Please try again.');
     }
   }
 
@@ -149,10 +194,14 @@ export class ProductsService {
       // First check if product exists and belongs to user
       await this.findOne(id, userId);
 
-      await this.databaseService.query(
-        'DELETE FROM products WHERE id = $1 AND user_id = $2',
+      const result = await this.databaseService.query(
+        'DELETE FROM products WHERE id = $1 AND user_id = $2 RETURNING id',
         [id, userId]
       );
+
+      if (result.rowCount === 0) {
+        throw new NotFoundException(`Product with ID ${id} not found or access denied`);
+      }
 
       this.logger.log(`Product deleted successfully: ${id} by user ${userId}`);
       return { message: 'Product deleted successfully' };
@@ -161,12 +210,16 @@ export class ProductsService {
         throw error;
       }
       this.logger.error(`Error deleting product ${id}: ${error.message}`, error.stack);
-      throw new InternalServerErrorException('Failed to delete product');
+      throw new BadRequestException('Failed to delete product. Please try again.');
     }
   }
 
   private mapToProductResponse(product: any): ProductResponseDto {
     try {
+      if (!product || !product.id) {
+        throw new Error('Invalid product data structure');
+      }
+
       return {
         id: product.id,
         name: product.name,
@@ -178,7 +231,7 @@ export class ProductsService {
       };
     } catch (error) {
       this.logger.error(`Error mapping product response: ${error.message}`, error.stack);
-      throw new InternalServerErrorException('Failed to process product data');
+      throw new BadRequestException('Failed to process product data');
     }
   }
 }
